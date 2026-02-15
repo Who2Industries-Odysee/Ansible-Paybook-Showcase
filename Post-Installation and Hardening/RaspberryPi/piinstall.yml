@@ -1,0 +1,114 @@
+---
+- name: Raspberry Pi OS post-install setup
+  hosts: all
+  become: true
+
+  vars:
+    deb_packages:
+      - curl
+      - fail2ban
+      - wget
+      - git
+      - ansible
+      - vim
+      - neovim
+      - btop
+      - rsync
+      - lf
+      - cockpit
+      - cockpit-machines
+      - libvirt-daemon-system
+      - cockpit-podman
+      - podman
+      - podman-compose
+      - cockpit-storaged
+      - cockpit-packagekit
+      - network-manager
+      - firewalld
+      - udisks2
+      - pcp
+      - sudo
+      - doas
+      - aardvark-dns
+
+    services:
+      - name: fail2ban.service
+        state: started
+        enabled: true
+      - name: cockpit.socket
+        state: started
+        enabled: true
+      - name: firewalld.service
+        state: started
+        enabled: true
+    ssh_port: 2204
+    fail2ban_email: alert@spoljarevic.info
+
+  tasks:
+    - name: Ensure the apt cache is up to date
+      ansible.builtin.apt:
+        update_cache: yes
+
+    - name: Install required Debian packages
+      ansible.builtin.apt:
+        name: "{{ deb_packages }}"
+        state: present
+        install_recommends: no
+
+    - name: Ensure selected systemd units are enabled and running
+      ansible.builtin.systemd:
+        name: "{{ item.name }}"
+        state: "{{ item.state }}"
+        enabled: "{{ item.enabled }}"
+        daemon_reload: true
+      loop: "{{ services }}"
+      register: svc_result
+      failed_when: svc_result.failed
+
+    - name: Ensure SSH port is set to {{ ssh_port }}
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?Port\s+'
+        line: "Port {{ ssh_port }}"
+        state: present
+        backup: yes
+
+    - name: Disable password authentication for SSH
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PasswordAuthentication\s+'
+        line: "PasswordAuthentication no"
+        state: present
+        backup: yes
+
+    - name: Ensure Fail2Ban jail.local exists
+      ansible.builtin.file:
+        path: /etc/fail2ban/jail.local
+        state: touch
+        mode: '0644'
+
+    - name: Add Fail2Ban DEFAULT and sshd sections
+      ansible.builtin.blockinfile:
+        path: /etc/fail2ban/jail.local
+        marker: "# {mark} ANSIBLE MANAGED BLOCK - SSH FAIL2BAN"
+        block: |
+          [DEFAULT]
+          destemail = {{ fail2ban_email }}
+          sendername = Fail2Ban
+
+          [sshd]
+          enabled = true
+          port = {{ ssh_port }}
+          mode = aggressive
+        backup: yes
+
+    - name: Reload SSH daemon
+      ansible.builtin.service:
+        name: sshd
+        state: reloaded
+
+    - name: Reload Fail2Ban service
+      ansible.builtin.service:
+        name: fail2ban
+        state: reloaded
+
